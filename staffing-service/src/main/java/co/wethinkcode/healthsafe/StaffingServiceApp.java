@@ -2,11 +2,17 @@ package co.wethinkcode.healthsafe;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.Javalin;
+import io.javalin.http.InternalServerErrorResponse;
 import io.javalin.http.ServiceUnavailableResponse;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.*;
 import java.util.*;
+
+import co.wethinkcode.healthsafe.mq.MqConfig;
+import org.apache.activemq.ActiveMQConnectionFactory;
+
+import javax.jms.*;
 
 
 public class StaffingServiceApp {
@@ -30,15 +36,44 @@ public class StaffingServiceApp {
 
         // TODO (Provides on-call schedules for doctors based on ward and status.)
         // Add domain endpoints for staffing-service here.
+        // GET endpoint to view current schedule
         app.get("/schedule/{wardId}", ctx -> {
-            Map<String, Object> schedule = buildSchedule(ctx.pathParam("wardId"));
-            if (schedule == null) {
-                ctx.status(404).result("Unknown ward: " + ctx.pathParam("wardId"));
-            } else {
+            try {
+                Map<String, Object> schedule = buildSchedule(ctx.pathParam("wardId"));
+                if (schedule == null) {
+                    ctx.status(404).result("Unknown ward: " + ctx.pathParam("wardId"));
+                } else {
+                    ctx.json(schedule);
+                }
+            } catch (ServiceUnavailableResponse e) {
+                throw e;
+            } catch (Exception e) {
+                throw new InternalServerErrorResponse("Failed to generate schedule: " + e.getMessage());
+            }
+        });
+
+        // POST endpoint to generate schedule and publish event to ActiveMQ Topic
+        app.post("/schedule/{wardId}", ctx -> {
+            try {
+                Map<String, Object> schedule = buildSchedule(ctx.pathParam("wardId"));
+                if (schedule == null) {
+                    ctx.status(404).result("Unknown ward: " + ctx.pathParam("wardId"));
+                    return;
+                }
+
+                // Send JSON event to ActiveMQ Topic
+                publish(MAPPER.writeValueAsString(schedule));
+
+                // Respond to caller
                 ctx.json(schedule);
+            } catch (ServiceUnavailableResponse e) {
+                throw e;
+            } catch (Exception e) {
+                throw new InternalServerErrorResponse("Failed to publish schedule event: " + e.getMessage());
             }
         });
     }
+
 
     // Returns null if the ward does not exist
     private static Map<String, Object> buildSchedule(String wardId) throws Exception {
@@ -67,6 +102,18 @@ public class StaffingServiceApp {
     private static HttpResponse<String> get(String url) throws Exception {
         return HTTP.send(HttpRequest.newBuilder(URI.create(url)).build(),
                 HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static void publish(String json) throws Exception {
+        ConnectionFactory factory = new ActiveMQConnectionFactory(MqConfig.BROKER_URL);
+        Connection conn = factory.createConnection();
+        try {
+            Session session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
+            MessageProducer producer = session.createProducer(session.createTopic(MqConfig.TOPIC));
+            producer.send(session.createTextMessage(json));
+        } finally {
+            conn.close();
+        }
     }
 }
 
