@@ -2,61 +2,58 @@
 
 ## Overview
 
-Parses and cleans `wards-outdated.csv`, a messy legacy export of wards, wings, and specialist departments data, and is the
-first stop in the HealthSafe pipeline. Independent Maven module, no parent pom.
+Parses and cleans `wards-outdated.csv`, a messy legacy export of wards, wings and
+specialist departments, and is the first stop in the HealthSafe pipeline. The CSV is
+read once at startup, each row is cleaned, duplicate wards are merged, and the result
+is served over REST for `ward-service` to consume. Independent Maven module, no parent pom.
 
 Part of the [HealthSafe](../README.md) project.
 
-REST: exposes the cleaned records for `ward-service` (`../ward-service`) to
-consume — see [Integration contracts](../README.md#integration-contracts) in the
-root README for the endpoint shape.
+## Endpoints
 
-## Example: one row cleaned
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Returns `OK` |
+| GET | `/wards` | All cleaned ward records (17 from the supplied CSV) |
 
-Input (`wards-outdated.csv`, row 6):
+## Cleaning rules
+
+| Problem in the CSV | How it is handled |
+|---|---|
+| Padded, inconsistently cased header | Header row is skipped; columns are read by position |
+| Lowercase or padded IDs (`w-02`, `W-03 `) | Trimmed and upper-cased (`W-02`, `W-03`) |
+| Padding and double spaces (`" East Wing "`, `South  Wing`) | Trimmed and collapsed to single spaces |
+| Inconsistent casing (`east wing`, `PAEDIATRICS`) | Title-cased; `ICU` is kept as an acronym |
+| Spelling variant (`Pediatrics`) | Mapped to `Paediatrics` |
+| Missing wing (W-08) | Stored as `null`, with a note |
+| Placeholders (`N/A`, `TBD`, `unknown`) | Not numbers, so `bedsAvailable` becomes `null` with a note |
+| Negative or unrealistic counts (`-1`, `-2`, `2023`) | Outside the valid range 0-100, so `null` with a note |
+| Spelled-out numbers (`five`) | Converted to digits for zero to nine |
+| Other non-numeric text (`full`) | `null` with a note. It could mean zero beds or at capacity, so it is not guessed |
+| Duplicate ward (`W-05` / `w-05`) | Merged into one record: the first row wins, and blanks are filled from the second. The merge is recorded in `notes` |
+
+Every changed or discarded value leaves a trace in the record's `notes` field.
+
+## Example: W-05 cleaned
+
+Input rows:
 
 ```
+W-05,East Wing,Paediatrics,5
 w-05,east wing ,PAEDIATRICS,five
 ```
 
-Expected shape after cleaning (exact field names are up to you — this illustrates
-the *kind* of transform expected, not a fixed schema to match exactly):
+Output (one merged record):
 
 ```json
 {
   "wardId": "W-05",
   "wing": "East Wing",
   "department": "Paediatrics",
-  "bedsAvailable": null,
-  "notes": "bedsAvailable was non-numeric ('five') — flagged for follow-up"
+  "bedsAvailable": 5,
+  "notes": " | duplicate row merged: bedsAvailable 'five' converted to 5"
 }
 ```
-
-Note this row is also a near-duplicate of `W-05` two rows above it (same real ward,
-different ID casing and field values) — deciding how to merge or flag duplicates
-like this is part of the exercise.
-
-## Known data issues
-
-`wards-outdated.csv` is deliberately messy — cleaning it is the point of this service. Look
-out for (and handle) at least:
-
-- **Inconsistent casing** in IDs, names, and status/category values (`Active` /
-  `active` / `ACTIVE`)
-- **Padding** — leading/trailing spaces, and the occasional double space, inside
-  fields
-- **Duplicate records** for the same real-world entity, written with a different ID
-  casing/format and/or slightly different field values
-- **Inconsistent date formats** (`YYYY-MM-DD`, `MM/DD/YYYY`, `DD-MM-YYYY`, one- and
-  two-digit months/days) and outright invalid dates
-- **Missing / placeholder values** — blank fields, `N/A`, `n/a`, `TBD`, `unknown`,
-  `-`, `NaN`
-- **Invalid or non-numeric values** in numeric columns (negative counts, spelled-out
-  numbers, unrealistic values)
-- **Inconsistent boolean/flag representations** (`Y`/`N`, `yes`/`no`, `1`/`0`,
-  `true`/`FALSE`)
-- **Naming/spelling variants** for the same thing (e.g. regional spelling
-  differences, synonyms)
 
 ## Project structure
 
@@ -64,9 +61,14 @@ out for (and handle) at least:
 ingestion-service/
 ├── pom.xml
 └── src/main/
-    ├── java/co/wethinkcode/healthsafe/IngestionServiceApp.java
+    ├── java/co/wethinkcode/healthsafe/
+    │   ├── IngestionServiceApp.java
+    │   ├── Ward.java
+    │   └── WardCleaner.java
     └── resources/wards-outdated.csv
 ```
+
+The CSV is loaded with `getResourceAsStream`, so it is found inside the packaged jar.
 
 ## Build
 
@@ -80,16 +82,16 @@ mvn package
 java -jar target/ingestion-service.jar
 ```
 
-Listens on port `7030`. Currently just exposes `/health` — the actual CSV
-parsing/cleaning logic is a TODO.
+Listens on port `7030`.
 
 ## Test
 
-No automated tests yet. Manually verify it's up:
+No automated tests. Manual checks:
 
 ```
 curl http://localhost:7030/health   # -> OK
+curl http://localhost:7030/wards    # 17 cleaned records
 ```
 
-To add real tests, add JUnit 5 + the Surefire plugin to `pom.xml`, put tests under
-`src/test/java/co/wethinkcode/healthsafe/`, and run `mvn test`.
+Things to check in the output: W-05 has `bedsAvailable: 5`, W-08 has `wing: null`,
+W-11 says `Paediatrics`, and W-13 has `bedsAvailable: null`.

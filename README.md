@@ -31,6 +31,15 @@ for `staffing-events-topic`: Staffing updates are broadcast as Events via the br
 **Status:** scaffold only — build files, Javalin bootstrap, and TODOs are in place; no
 business logic has been implemented yet.
 
+**Status:** Stages 1-3 implemented and tested manually: ingestion and cleaning, the three
+REST services, and topic-based decoupling via `staffing-events-topic`. Stage 4: `ward-service`
+publishes equipment failures to `equipment-failure-queue`, and `equipment-alert-service`
+consumes them (adjust to what you actually finished).
+
+**Start-up order:** broker (`common/`), then `ingestion-service`, `alert-level-service`,
+`ward-service`, `staffing-service`, and `equipment-alert-service`. Ward-service loads its data
+from ingestion on first request, so the REST services do not strictly need this order.
+
 ## Your task
 
 Each stage below builds on the last — do them in order. Every service already builds
