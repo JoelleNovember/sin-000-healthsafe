@@ -1,6 +1,6 @@
 # HealthSafe
 
-# VERIFICATION CODE:
+## VERIFICATION CODE:
 WTC-S48JHU5H
 
 ## Overview
